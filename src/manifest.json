@@ -1,0 +1,15 @@
+{
+	"manifest_version": 1,
+	"id": "com.github.full-notebook-view",
+	"app_min_version": "3.5",
+	"version": "1.0.0",
+	"name": "Full Notebook View",
+	"description": "A Windows File Explorer-style tree view panel showing notebooks and notes with expand/collapse, search, sort, and new note creation.",
+	"author": "",
+	"homepage_url": "",
+	"repository_url": "",
+	"keywords": ["notebooks", "tree-view", "file-explorer", "navigation"],
+	"categories": ["productivity", "appearance"],
+	"screenshots": [],
+	"icons": {}
+}
