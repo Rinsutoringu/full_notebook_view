@@ -285,19 +285,13 @@ joplin.plugins.register({
 		await joplin.views.panels.addScript(panel, './webview.js');
 		await joplin.views.panels.addScript(panel, './webview.css');
 
-		const fs = joplin.require('fs');
-		let dataDir: string = '';
-		try { dataDir = await (joplin.plugins as any).dataDir(); } catch (e) {}
+		const installDir: string = await (joplin.plugins as any).installationDir();
 
 		async function applyTitleInputCss() {
-			if (!dataDir) return;
 			try {
-				await fs.promises.mkdir(dataDir, { recursive: true });
 				const hide: boolean = await joplin.settings.value('fullNotebookView.hideTitleInput');
-				const cssContent = hide ? '.title-input { display: none !important; }' : '';
-				const cssPath = `${dataDir}/title-input.css`;
-				await fs.promises.writeFile(cssPath, cssContent, 'utf8');
-				await (joplin as any).window.loadChromeCssFile(cssPath);
+				const cssFile = hide ? 'title-input-hide.css' : 'title-input-show.css';
+				await (joplin as any).window.loadChromeCssFile(`${installDir}/${cssFile}`);
 			} catch (e) {}
 		}
 
