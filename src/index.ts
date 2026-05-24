@@ -181,6 +181,75 @@ async function countNotesInFolder(folderId: string): Promise<number> {
 	return count;
 }
 
+function sanitizeFileName(name: string): string {
+	return (name || 'untitled').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\.+$/, '').trim() || 'untitled';
+}
+
+async function flattenSingleNoteExport(noteId: string, targetPath: string, fmt: 'md' | 'html'): Promise<{ success: boolean, path?: string, error?: string }> {
+	const fs = require('fs');
+	const path = require('path');
+	const os = require('os');
+
+	const tmpDir = path.join(os.tmpdir(), 'fnv-export-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+	fs.mkdirSync(tmpDir, { recursive: true });
+
+	const ext = fmt === 'html' ? '.html' : '.md';
+
+	try {
+		await joplin.commands.execute('exportNotes', [noteId], fmt, tmpDir);
+
+		// Joplin's exporter creates <tmp>/<NotebookPath>/<Note>.<ext> and <tmp>/_resources/<id>.<ext>
+		// We flatten: copy the note file to <target>/<title>.<ext> and rename _resources -> resources
+		let foundFile: string | null = null;
+		const walk = (dir: string) => {
+			if (foundFile) return;
+			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+				const full = path.join(dir, entry.name);
+				if (entry.isDirectory()) {
+					if (entry.name === '_resources' || entry.name === 'resources') continue;
+					walk(full);
+				} else if (entry.isFile() && entry.name.toLowerCase().endsWith(ext)) {
+					foundFile = full;
+					return;
+				}
+			}
+		};
+		walk(tmpDir);
+
+		if (!foundFile) return { success: false, error: `Exported ${fmt} file not found` };
+
+		const note = await joplin.data.get(['notes', noteId], { fields: ['title'] });
+		const safeName = sanitizeFileName(note?.title);
+
+		// Rewrite resource references: any leading "../" segments + "_resources/" -> "resources/"
+		// Works for both md (markdown link/image syntax) and html (src/href attribute paths)
+		let body = fs.readFileSync(foundFile, 'utf8');
+		body = body.replace(/(?:\.\.\/)+_resources\//g, 'resources/').replace(/(?<![A-Za-z0-9_./])_resources\//g, 'resources/');
+
+		const outFile = path.join(targetPath, safeName + ext);
+		fs.writeFileSync(outFile, body, 'utf8');
+
+		const resSrc = path.join(tmpDir, '_resources');
+		if (fs.existsSync(resSrc)) {
+			const resDst = path.join(targetPath, 'resources');
+			fs.mkdirSync(resDst, { recursive: true });
+			for (const f of fs.readdirSync(resSrc)) {
+				const s = path.join(resSrc, f);
+				const d = path.join(resDst, f);
+				const stat = fs.statSync(s);
+				if (stat.isFile()) fs.copyFileSync(s, d);
+			}
+		}
+
+		return { success: true, path: outFile };
+	} finally {
+		try {
+			if (typeof fs.rmSync === 'function') fs.rmSync(tmpDir, { recursive: true, force: true });
+			else fs.rmdirSync(tmpDir, { recursive: true });
+		} catch (_e) { /* ignore cleanup failure */ }
+	}
+}
+
 joplin.plugins.register({
 	onStart: async function () {
 		const panel = await joplin.views.panels.create('fullNotebookView.panel');
@@ -216,22 +285,89 @@ joplin.plugins.register({
 		});
 
 		const dialogs = (joplin.views as any).dialogs;
-		const exportDialog = await dialogs.create('fnv-export-fmt');
-		await dialogs.setHtml(exportDialog, `
-			<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;padding:20px 24px;box-sizing:border-box;">
-				<div style="font-weight:500;font-size:15px;margin-bottom:14px;">Select export format:</div>
+
+		const buildExportHtml = (includeJex: boolean) => `
+			<style>
+				#fnv-export-root {
+					font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+					font-size: 14px;
+					width: 320px;
+					padding: 20px 24px;
+					box-sizing: border-box;
+					color: #222;
+					background: #fff;
+				}
+				#fnv-export-root .fnv-export-label {
+					font-weight: 500;
+					font-size: 15px;
+					margin-bottom: 12px;
+					white-space: nowrap;
+					color: #222;
+				}
+				#fnv-export-root form { margin: 0; }
+				#fnv-export-root .fnv-fmt-option {
+					display: flex;
+					align-items: center;
+					padding: 8px 10px;
+					margin-bottom: 4px;
+					border-radius: 4px;
+					cursor: pointer;
+					user-select: none;
+					transition: background-color 0.12s;
+				}
+				#fnv-export-root .fnv-fmt-option:hover {
+					background-color: #f0f4ff;
+				}
+				#fnv-export-root .fnv-fmt-option:last-child {
+					margin-bottom: 0;
+				}
+				#fnv-export-root .fnv-fmt-option input[type="radio"] {
+					margin: 0 10px 0 0;
+					accent-color: #2b7de9;
+					cursor: pointer;
+					flex-shrink: 0;
+				}
+				#fnv-export-root .fnv-fmt-option .fnv-fmt-text {
+					font-size: 14px;
+					color: #222;
+					line-height: 1.4;
+				}
+			</style>
+			<div id="fnv-export-root">
+				<div class="fnv-export-label">Select export format:</div>
 				<form name="exportForm">
-					<select name="fmt" style="width:100%;min-width:260px;padding:8px 10px;font-size:14px;border:1px solid #ccc;border-radius:4px;">
-						<option value="md">Markdown (.md)</option>
-						<option value="html">HTML</option>
-						<option value="jex">JEX archive</option>
-						<option value="pdf">PDF</option>
-					</select>
+					<label class="fnv-fmt-option">
+						<input type="radio" name="fmt" value="md" checked />
+						<span class="fnv-fmt-text">Markdown (.md)</span>
+					</label>
+					<label class="fnv-fmt-option">
+						<input type="radio" name="fmt" value="html" />
+						<span class="fnv-fmt-text">HTML</span>
+					</label>
+					${includeJex ? `<label class="fnv-fmt-option">
+						<input type="radio" name="fmt" value="jex" />
+						<span class="fnv-fmt-text">JEX archive</span>
+					</label>` : ''}
+					<label class="fnv-fmt-option">
+						<input type="radio" name="fmt" value="pdf" />
+						<span class="fnv-fmt-text">PDF</span>
+					</label>
 				</form>
 			</div>
-		`);
-		await dialogs.setFitToContent(exportDialog, true);
-		await dialogs.setButtons(exportDialog, [
+		`;
+
+		const exportNoteDialog = await dialogs.create('fnv-export-fmt-note');
+		await dialogs.setHtml(exportNoteDialog, buildExportHtml(false));
+		await dialogs.setFitToContent(exportNoteDialog, true);
+		await dialogs.setButtons(exportNoteDialog, [
+			{ id: 'ok', title: 'Export' },
+			{ id: 'cancel', title: 'Cancel' },
+		]);
+
+		const exportFolderDialog = await dialogs.create('fnv-export-fmt-folder');
+		await dialogs.setHtml(exportFolderDialog, buildExportHtml(true));
+		await dialogs.setFitToContent(exportFolderDialog, true);
+		await dialogs.setButtons(exportFolderDialog, [
 			{ id: 'ok', title: 'Export' },
 			{ id: 'cancel', title: 'Cancel' },
 		]);
@@ -642,7 +778,7 @@ joplin.plugins.register({
 
 		case 'exportNote': {
 			try {
-				const fmtRes = await dialogs.open(exportDialog);
+				const fmtRes = await dialogs.open(exportNoteDialog);
 				if (fmtRes.id !== 'ok') return { success: false };
 				const fmt = fmtRes.formData?.exportForm?.fmt || 'md';
 
@@ -656,8 +792,26 @@ joplin.plugins.register({
 					properties: ['openDirectory'],
 					title: 'Select export destination',
 				});
-				if (!dirRes || dirRes.canceled || !dirRes.filePaths || dirRes.filePaths.length === 0) return { success: false };
-				const targetPath = dirRes.filePaths[0];
+				// Joplin's showOpenDialog returns string[] | null directly (not Electron's {canceled, filePaths} object)
+				const filePaths: string[] | null = Array.isArray(dirRes)
+					? dirRes
+					: (dirRes && dirRes.filePaths) ? dirRes.filePaths : null;
+				if (!filePaths || filePaths.length === 0) return { success: false };
+				const targetPath = filePaths[0];
+
+				if (fmt === 'md' || fmt === 'html') {
+					const flatRes = await flattenSingleNoteExport(message.noteId, targetPath, fmt as 'md' | 'html');
+					return flatRes;
+				}
+
+				// JEX: bundle entire note (with attachments) into <target>/<title>.jex
+				if (fmt === 'jex') {
+					const note = await joplin.data.get(['notes', message.noteId], { fields: ['title'] });
+					const safeName = sanitizeFileName(note?.title);
+					const jexFilePath = require('path').join(targetPath, safeName + '.jex');
+					await joplin.commands.execute('exportNotes', [message.noteId], 'jex', jexFilePath);
+					return { success: true, path: jexFilePath };
+				}
 
 				await joplin.commands.execute('exportNotes', [message.noteId], fmt, targetPath);
 				return { success: true, path: targetPath };
@@ -668,7 +822,7 @@ joplin.plugins.register({
 
 		case 'exportFolder': {
 			try {
-				const fmtRes2 = await dialogs.open(exportDialog);
+				const fmtRes2 = await dialogs.open(exportFolderDialog);
 				if (fmtRes2.id !== 'ok') return { success: false };
 				const fmt2 = fmtRes2.formData?.exportForm?.fmt || 'md';
 
@@ -685,8 +839,11 @@ joplin.plugins.register({
 					properties: ['openDirectory'],
 					title: 'Select export destination',
 				});
-				if (!dirRes2 || dirRes2.canceled || !dirRes2.filePaths || dirRes2.filePaths.length === 0) return { success: false };
-				let targetPath2 = dirRes2.filePaths[0];
+				const filePaths2: string[] | null = Array.isArray(dirRes2)
+					? dirRes2
+					: (dirRes2 && dirRes2.filePaths) ? dirRes2.filePaths : null;
+				if (!filePaths2 || filePaths2.length === 0) return { success: false };
+				let targetPath2 = filePaths2[0];
 
 				// JEX format requires a file path, not a directory
 				if (fmt2 === 'jex') {
