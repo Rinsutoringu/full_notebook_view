@@ -215,6 +215,27 @@ joplin.plugins.register({
 			},
 		});
 
+		const dialogs = (joplin.views as any).dialogs;
+		const exportDialog = await dialogs.create('fnv-export-fmt');
+		await dialogs.setHtml(exportDialog, `
+			<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;padding:20px 24px;box-sizing:border-box;">
+				<div style="font-weight:500;font-size:15px;margin-bottom:14px;">Select export format:</div>
+				<form name="exportForm">
+					<select name="fmt" style="width:100%;min-width:260px;padding:8px 10px;font-size:14px;border:1px solid #ccc;border-radius:4px;">
+						<option value="md">Markdown (.md)</option>
+						<option value="html">HTML</option>
+						<option value="jex">JEX archive</option>
+						<option value="pdf">PDF</option>
+					</select>
+				</form>
+			</div>
+		`);
+		await dialogs.setFitToContent(exportDialog, true);
+		await dialogs.setButtons(exportDialog, [
+			{ id: 'ok', title: 'Export' },
+			{ id: 'cancel', title: 'Cancel' },
+		]);
+
 		await joplin.views.panels.setHtml(panel, `
 			<div id="fnv-root">
 				<div id="fnv-tabs">
@@ -621,20 +642,64 @@ joplin.plugins.register({
 
 		case 'exportNote': {
 			try {
-				await joplin.commands.execute('exportNotes', [message.noteId]);
+				const fmtRes = await dialogs.open(exportDialog);
+				if (fmtRes.id !== 'ok') return { success: false };
+				const fmt = fmtRes.formData?.exportForm?.fmt || 'md';
+
+				// PDF uses a dedicated command with its own save dialog
+				if (fmt === 'pdf') {
+					await joplin.commands.execute('exportPdf', [message.noteId]);
+					return { success: true };
+				}
+
+				const dirRes = await dialogs.showOpenDialog({
+					properties: ['openDirectory'],
+					title: 'Select export destination',
+				});
+				if (!dirRes || dirRes.canceled || !dirRes.filePaths || dirRes.filePaths.length === 0) return { success: false };
+				const targetPath = dirRes.filePaths[0];
+
+				await joplin.commands.execute('exportNotes', [message.noteId], fmt, targetPath);
+				return { success: true, path: targetPath };
 			} catch (e) {
-				return { success: false, error: 'Export not available' };
+				return { success: false, error: String(e) };
 			}
-			return { success: true };
 		}
 
 		case 'exportFolder': {
 			try {
-				await joplin.commands.execute('exportFolders', [message.folderId]);
+				const fmtRes2 = await dialogs.open(exportDialog);
+				if (fmtRes2.id !== 'ok') return { success: false };
+				const fmt2 = fmtRes2.formData?.exportForm?.fmt || 'md';
+
+				// PDF: collect all note IDs in folder, then use exportPdf
+				if (fmt2 === 'pdf') {
+					const notes = await fetchNotesInFolder(message.folderId);
+					if (notes.length === 0) return { success: false, error: 'No notes in this folder' };
+					const noteIds = notes.map(n => n.id);
+					await joplin.commands.execute('exportPdf', noteIds);
+					return { success: true };
+				}
+
+				const dirRes2 = await dialogs.showOpenDialog({
+					properties: ['openDirectory'],
+					title: 'Select export destination',
+				});
+				if (!dirRes2 || dirRes2.canceled || !dirRes2.filePaths || dirRes2.filePaths.length === 0) return { success: false };
+				let targetPath2 = dirRes2.filePaths[0];
+
+				// JEX format requires a file path, not a directory
+				if (fmt2 === 'jex') {
+					const folderData = await joplin.data.get(['folders', message.folderId], { fields: ['title'] });
+					const safeName = (folderData.title || 'export').replace(/[<>:"/\\|?*]/g, '_');
+					targetPath2 = require('path').join(targetPath2, safeName + '.jex');
+				}
+
+				await joplin.commands.execute('exportFolders', [message.folderId], fmt2, targetPath2);
+				return { success: true, path: targetPath2 };
 			} catch (e) {
-				return { success: false, error: 'Export not available' };
+				return { success: false, error: String(e) };
 			}
-			return { success: true };
 		}
 
 		case 'showNoteProperties': {

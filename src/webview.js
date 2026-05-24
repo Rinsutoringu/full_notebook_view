@@ -26,6 +26,8 @@ var state = {
 	searchHistoryOpen: false,
 	searchHistoryShowAll: false,
 };
+var userScrolledRecently = false;
+var userScrollTimer = null;
 
 var SVG_CHEVRON_RIGHT = '<svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06z"/></svg>';
 var SVG_CHEVRON_DOWN = '<svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.75.75 0 0 1 1.06-1.06L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0z"/></svg>';
@@ -763,7 +765,7 @@ function handleTocClick(e) {
 	}
 }
 
-async function expandToNote(noteId) {
+async function expandToNote(noteId, shouldScroll) {
 	var result = await webviewApi.postMessage({ type: 'getNotePath', noteId: noteId });
 	if (!result || !result.path || result.path.length === 0) {
 		renderTree();
@@ -797,6 +799,7 @@ async function expandToNote(noteId) {
 	}
 	renderTree();
 	setTimeout(function () {
+		if (shouldScroll === false) return;
 		var activeEl = document.querySelector('.fnv-active-note');
 		if (activeEl) activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 	}, 50);
@@ -845,6 +848,19 @@ async function expandToFolder(folderId) {
 			}, { once: true });
 		}
 	}, 50);
+}
+
+
+function showToast(msg) {
+	var toast = document.createElement('div');
+	toast.className = 'fnv-toast';
+	toast.textContent = msg;
+	document.body.appendChild(toast);
+	setTimeout(function () { toast.classList.add('fnv-toast-show'); }, 10);
+	setTimeout(function () {
+		toast.classList.remove('fnv-toast-show');
+		setTimeout(function () { toast.remove(); }, 300);
+	}, 3000);
 }
 
 function dismissContextMenu() {
@@ -964,7 +980,15 @@ function showNoteContextMenu(x, y, noteId, el) {
 		}},
 		{ separator: true },
 		{ label: 'Move to Notebook', action: function () { webviewApi.postMessage({ type: 'moveToFolder', itemId: noteId }); } },
-		{ label: 'Export', action: function () { webviewApi.postMessage({ type: 'exportNote', noteId: noteId }); } },
+		{ label: 'Export', action: function () {
+			webviewApi.postMessage({ type: 'exportNote', noteId: noteId }).then(function (result) {
+				if (result && result.success && result.path) {
+					showToast('Exported to: ' + result.path);
+				} else if (result && result.error) {
+					showToast('Export failed: ' + result.error);
+				}
+			});
+		}},
 		{ separator: true },
 		{ label: 'Properties', action: function () { webviewApi.postMessage({ type: 'showNoteProperties', noteId: noteId }); } },
 		{ label: 'Publish', action: function () { webviewApi.postMessage({ type: 'publishNote', noteId: noteId }); } },
@@ -990,7 +1014,15 @@ function showFolderContextMenu(x, y, folderId, el) {
 		{ separator: true },
 		{ label: 'Rename', action: function () { startInlineRename(el, folderId, 'folder', folderTitle); } },
 		{ label: 'Move to Notebook', action: function () { webviewApi.postMessage({ type: 'moveToFolder', itemId: folderId }); } },
-		{ label: 'Export', action: function () { webviewApi.postMessage({ type: 'exportFolder', folderId: folderId }); } },
+		{ label: 'Export', action: function () {
+			webviewApi.postMessage({ type: 'exportFolder', folderId: folderId }).then(function (result) {
+				if (result && result.success && result.path) {
+					showToast('Exported to: ' + result.path);
+				} else if (result && result.error) {
+					showToast('Export failed: ' + result.error);
+				}
+			});
+		}},
 		{ separator: true },
 		{ label: 'Delete Notebook', danger: true, action: function () { showDeleteFolderDialog(folderId, folderTitle); } },
 	];
@@ -1077,6 +1109,10 @@ function addNoteToFolderCache(note) {
 		state.expandedFolders[folderId] = true;
 	}
 	renderTree();
+	setTimeout(function () {
+		var noteEl = document.querySelector('.fnv-tree-item.fnv-note[data-id="' + note.id + '"]');
+		if (noteEl) startInlineRename(noteEl, note.id, 'note', note.title || 'Untitled');
+	}, 30);
 }
 
 function removeNoteFromFolderCache(noteId) {
@@ -1227,10 +1263,11 @@ webviewApi.onMessage(function (message) {
 
 	switch (message.type) {
 		case 'noteSelected':
+			var noteChanged = state.selectedNoteId !== message.noteId;
 			state.selectedNoteId = message.noteId;
 			state.selectedFolderId = message.folderId || state.selectedFolderId;
 			if (message.noteId && !state.isSearchMode) {
-				expandToNote(message.noteId);
+				expandToNote(message.noteId, noteChanged);
 			} else {
 				renderTree();
 			}
@@ -1290,6 +1327,15 @@ async function initialize() {
 	setupToolbar();
 	setupTabs();
 	setupSyncBar();
+
+	var treeContainer = document.getElementById('fnv-tree');
+	if (treeContainer) {
+		treeContainer.addEventListener('scroll', function () {
+			userScrolledRecently = true;
+			if (userScrollTimer) clearTimeout(userScrollTimer);
+			userScrollTimer = setTimeout(function () { userScrolledRecently = false; }, 3000);
+		});
+	}
 
 	var result = await webviewApi.postMessage({ type: 'init' });
 	if (result) {
