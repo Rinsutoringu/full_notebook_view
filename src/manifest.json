@@ -12,6 +12,6 @@
 	"categories": ["productivity", "appearance"],
 	"screenshots": [],
 	"icons": {
-		"256": "icon.png"
+		"256": "assets/icon.png"
 	}
 }

@@ -5,13 +5,13 @@
 	"version": "1.0.0",
 	"name": "Full Notebook View",
 	"description": "A Windows File Explorer-style tree view panel showing notebooks and notes with expand/collapse, search, sort, and new note creation.",
-	"author": "",
-	"homepage_url": "",
-	"repository_url": "",
+	"author": "rinchord",
+	"homepage_url": "https://github.com/Rinsutoringu/full_notebook_view",
+	"repository_url": "https://github.com/Rinsutoringu/full_notebook_view",
 	"keywords": ["notebooks", "tree-view", "file-explorer", "navigation"],
 	"categories": ["productivity", "appearance"],
 	"screenshots": [],
 	"icons": {
-		"256": "icon.png"
+		"256": "assets/icon.png"
 	}
 }
