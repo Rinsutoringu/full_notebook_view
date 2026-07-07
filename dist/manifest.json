@@ -11,5 +11,7 @@
 	"keywords": ["notebooks", "tree-view", "file-explorer", "navigation"],
 	"categories": ["productivity", "appearance"],
 	"screenshots": [],
-	"icons": {}
+	"icons": {
+		"256": "icon.png"
+	}
 }
