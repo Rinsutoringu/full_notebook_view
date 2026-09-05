@@ -84,6 +84,16 @@ function sortItems(items, sortMode) {
 	return sorted;
 }
 
+function sortSearchResults(items) {
+	var sorted = items.slice();
+	sorted.sort(function (a, b) {
+		var rankDiff = (a.searchRank == null ? 2 : a.searchRank) - (b.searchRank == null ? 2 : b.searchRank);
+		if (rankDiff !== 0) return rankDiff;
+		return (a.title || '').localeCompare(b.title || '');
+	});
+	return sorted;
+}
+
 function renderFolderNode(folder, depth) {
 	var isExpanded = !!state.expandedFolders[folder.id];
 	var isSelected = state.selectedFolderId === folder.id;
@@ -161,7 +171,7 @@ function renderSearchResults() {
 		return;
 	}
 	
-	var sorted = sortItems(state.searchResults, state.sortMode);
+	var sorted = sortSearchResults(state.searchResults);
 	var html = '<div class="fnv-tree-container">';
 	
 	for (var i = 0; i < sorted.length; i++) {
